@@ -2,6 +2,7 @@
  * it defines an elementwise binary assignment operator
  * which works by iterating over all elements
  * for compatible operands */
+#include "compathack.h"
 
 #ifndef ASSIGNOP_LOOP
 typedef int (assignop_loop_fun) (Tcl_Interp *interp, NumArraySharedBuffer *sharedbuf, NumArrayInfo *sliceinfo, Tcl_Obj *value);
@@ -99,20 +100,40 @@ int CMD(
 		if (NumArrayInfoSlice(interp, info, objv[2], &sliceinfo) != TCL_OK) {
 			goto cleanobj;
 		}
+		/* note - due to value (esp. literal) sharing it can happen that parsing the slice 
+		 * shimmers value back to a different type. Therefore we must ensure that 
+		 * value and naObj are numeric arrays. Perverse example: x[x] = x
+		 * naObj is never shared at this point */
+
+		if (Tcl_ConvertToType(interp, value, &NumArrayTclType) != TCL_OK) {
+			/* if an error occurs here, there is a refcounting bug */
+			goto cleanobj;
+		}
+		valueinfo = value -> internalRep.twoPtrValue.ptr2;
+		
 	} else {
 		/* No slicing. Take the full array */
 		sliceinfo = info;
 	}
-
+	
 	/* Check if dimensions are compatible. Also holds if value is scalar */
 	if (!NumArrayCompatibleDimensions(sliceinfo, valueinfo) && !ISSCALARINFO(valueinfo)) {
 		Tcl_SetResult(interp, "Dimension mismatch", NULL);
 		goto cleaninfo;
 	}
+	
+	/* map to int,double,complex - workaround
+	 * until we have the real implementation */
+	int ind1=NumArrayCompatTypeMap[sliceinfo->type];
+	int ind2=NumArrayCompatTypeMap[valueinfo->type];
+	if (ind1 < 0 || ind2 < 0) {
+		Tcl_SetObjResult(interp, Tcl_ObjPrintf("Operator undefined for types %s, %s", NumArray_typename[sliceinfo->type], NumArray_typename[valueinfo->type]));
+		goto cleaninfo;
+	}
 
 	
-	if (LOOPTBL[sliceinfo -> type][valueinfo -> type](interp, sharedbuf, sliceinfo, value)!=TCL_OK) {
-		return TCL_ERROR;
+	if (LOOPTBL[ind1][ind2](interp, sharedbuf, sliceinfo, value)!=TCL_OK) {
+		goto cleaninfo;
 	}
 
 	/* no error so far - discard temp sliceinfo, string rep and set variable and result */

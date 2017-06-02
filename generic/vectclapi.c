@@ -1,4 +1,5 @@
 #include "vectclInt.h"
+#include "map.h"
 
 /* This actually isn't a stub file. 
   * It contains the actual implementations out of laziness */
@@ -39,14 +40,11 @@ NumArrayType NumArray_UpcastCommonType(NumArrayType type1, NumArrayType type2) {
 	return result;
 }
 
-int NumArrayType_SizeOf(NumArrayType type) {
+size_t NumArrayType_SizeOf(NumArrayType type) {
+#define TYPESIZE(X) case X: return sizeof(C_FROM_NATYPE(X));
+
 	switch (type) {
-		case NumArray_Int:
-			return sizeof(NaWideInt);
-		case NumArray_Float64:
-			return sizeof(double);
-		case NumArray_Complex128:
-			return sizeof(NumArray_Complex);
+		MAP(TYPESIZE, NA_NUMERICTYPES) 
 		default: 
 			printf("Error: unknown data type %d", type);
 			return 1;	
@@ -64,14 +62,10 @@ int NumArrayConvertToType(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayType type,
 	info = naObj -> internalRep.twoPtrValue.ptr2;
 	sharedbuf = naObj -> internalRep.twoPtrValue.ptr1;
 
-	if (type < info -> type) {
-		/* Downcasting is an error */
-		Tcl_SetResult(interp, "Cannot downcast numeric array to requested type", NULL);
-		return TCL_ERROR;
-	}
-	
 	/* Check for no-op */
 	if (type == info -> type) {
+		*dest = naObj;
+		Tcl_IncrRefCount(*dest);
 		return TCL_OK;
 	}
 
@@ -84,34 +78,51 @@ int NumArrayConvertToType(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayType type,
 	NumArrayIteratorInit(convinfo, convbuf, &convit);
 	/* The new buffer is in canonical form, 
 	 * therefore simply advance the pointer at every element */
-	if (type == NumArray_Float64 && info -> type == NumArray_Int) {
-		double *bufptr = NumArrayIteratorDeRefPtr(&convit);
-		for (; ! NumArrayIteratorFinished(&it); NumArrayIteratorAdvance(&it)) {
-				* bufptr++ = NumArrayIteratorDeRefInt(&it);
-		}
-	} else if (type == NumArray_Complex128 && info -> type == NumArray_Float64) {
-		NumArray_Complex *bufptr = NumArrayIteratorDeRefPtr(&convit);
-		for (; ! NumArrayIteratorFinished(&it); NumArrayIteratorAdvance(&it)) {
-				NumArray_Complex value; 
-				value.re = NumArrayIteratorDeRefDouble(&it);
-				value.im = 0.0;
-				* bufptr++ = value;
-		}
-	} else if (type == NumArray_Complex128 && info -> type == NumArray_Int) {
-		NumArray_Complex *bufptr = NumArrayIteratorDeRefPtr(&convit);
-		for (; ! NumArrayIteratorFinished(&it); NumArrayIteratorAdvance(&it)) {
-				NumArray_Complex value; 
-				value.re = NumArrayIteratorDeRefInt(&it);
-				value.im = 0.0;
-				* bufptr++ = value;
-		}
-	} else {
-		Tcl_SetResult(interp, "Unknown data type conversion", NULL);
-		DeleteNumArrayInfo(convinfo);
-		NumArraySharedBufferDecrRefcount(convbuf);
-		return TCL_ERROR;
-	}
 
+	/* all conversions which can be done by the C compiler */
+	#define BUILTINCONV(X, Y) \
+		if (type == X && info -> type == Y) { \
+			C_FROM_NATYPE(X) *bufptr = NumArrayIteratorDeRefPtr(&convit); \
+			for (; ! NumArrayIteratorFinished(&it); NumArrayIteratorAdvance(&it)) { \
+				* bufptr++ = (C_FROM_NATYPE(X)) (*((C_FROM_NATYPE(Y)*)NumArrayIteratorDeRefPtr(&it))); \
+			} \
+			goto ready; \
+		}
+		
+	#define INNER(X) MAPARG(BUILTINCONV, X, NA_REALTYPES)
+	#define OUTER MAP(INNER, NA_REALTYPES)
+	OUTER
+	#undef OUTER
+	#undef INNER
+	#undef BUILTINCONV
+
+	/* conversions to complex from real: set imag part to 0 */
+	#define REAL2COMPLEXCONV(CX, RY) \
+		if (type == CX && info -> type == RY) { \
+			C_FROM_NATYPE(CX) *bufptr = NumArrayIteratorDeRefPtr(&convit); \
+			for (; ! NumArrayIteratorFinished(&it); NumArrayIteratorAdvance(&it)) { \
+				C_FROM_NATYPE(CX) value; \
+				value.re = *((C_FROM_NATYPE(RY)*)NumArrayIteratorDeRefPtr(&it)); \
+				value.im = 0.0; \
+				* bufptr++ = value; \
+			} \
+			goto ready; \
+		}
+		
+	#define INNER(X) MAPARG(REAL2COMPLEXCONV, X, NA_REALTYPES)
+	#define OUTER MAP(INNER, NumArray_Complex64, NumArray_Complex128)
+	OUTER
+	#undef OUTER
+	#undef INNER
+	#undef REAL2COMPLEXCONV
+
+	/* If we are here, no conversion has triggered */
+	Tcl_SetResult(interp, "Unknown data type conversion", NULL);
+	DeleteNumArrayInfo(convinfo);
+	NumArraySharedBufferDecrRefcount(convbuf);
+	return TCL_ERROR;
+
+ready:
 	NumArrayIteratorFree(&it);
 	NumArrayIteratorFree(&convit);
 
@@ -127,26 +138,33 @@ int NumArrayConvertToType(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayType type,
  * (metadata describing the memory buffer 
  */
 
+static inline NumArrayInfo * AllocNumArrayInfo(int nDim) {
+	/* Allocate uninitialized space for NumArrayInfo */
+	char *allocptr = malloc(sizeof(NumArrayInfo)+2*sizeof(index_t)*nDim);
+	NumArrayInfo* result = (NumArrayInfo *)allocptr;
+	result -> nDim = nDim;
+	result -> dims = (index_t*) (allocptr+sizeof(NumArrayInfo));
+	result -> pitches = (index_t*) (allocptr+sizeof(NumArrayInfo)+sizeof(index_t)*nDim);
+	return result;
+}
+
 /* Constructor, destructor, copy constructor for NumArrayInfo */
-NumArrayInfo* CreateNumArrayInfo(int nDim, const int *dims, NumArrayType dtype) {
+NumArrayInfo* CreateNumArrayInfo(int nDim, const index_t *dims, NumArrayType dtype) {
 	/* Create empty information with nDim number of dimensions
 	 * initialised to dimensions in dims.
 	 * initialized to zero size, if dims == NULL
 	 * TODO catch out of memory */
 	int d = 0;
-	int elemsize=NumArrayType_SizeOf(dtype);
+	size_t elemsize=NumArrayType_SizeOf(dtype);
 	
-	NumArrayInfo* result = ckalloc(sizeof(NumArrayInfo));
-	result -> nDim = nDim;
+	NumArrayInfo* result = AllocNumArrayInfo(nDim);
 	result -> canonical = 1;
 	result -> bufsize = elemsize;
 	result -> type = dtype;
-	result -> dims = ckalloc(sizeof(int)*nDim);
 	result -> offset = 0;
-	result -> pitches = ckalloc(sizeof(int)*nDim);
 	
 	for (d=0; d<nDim; d++) {
-		int dim=0;
+		index_t dim=0;
 		if (dims) {
 			dim=dims[d];
 			if (dim<0) dim=0;
@@ -174,25 +192,22 @@ NumArrayInfo* CreateNumArrayInfo(int nDim, const int *dims, NumArrayType dtype) 
 /* The same as CreateNumArrayInfo, but creates
  * column major storage (=Fortran format)
  * to optimize cache access pattern in QR, LU etc. */
-NumArrayInfo* CreateNumArrayInfoColMaj(int nDim, const int *dims, NumArrayType dtype) {
+NumArrayInfo* CreateNumArrayInfoColMaj(int nDim, const index_t *dims, NumArrayType dtype) {
 	/* Create empty information with nDim number of dimensions
 	 * initialised to dimensions in dims.
 	 * initialized to zero size, if dims == NULL
 	 * TODO catch out of memory */
 	int d = 0;
-	int elemsize=NumArrayType_SizeOf(dtype);
+	size_t elemsize=NumArrayType_SizeOf(dtype);
 	
-	NumArrayInfo* result = ckalloc(sizeof(NumArrayInfo));
-	result -> nDim = nDim;
+	NumArrayInfo* result = AllocNumArrayInfo(nDim);
 	result -> canonical = 0; /* column major */
 	result -> bufsize = elemsize;
 	result -> type = dtype;
-	result -> dims = ckalloc(sizeof(int)*nDim);
 	result -> offset = 0;
-	result -> pitches = ckalloc(sizeof(int)*nDim);
-	
+
 	for (d=0; d<nDim; d++) {
-		int dim=0;
+		index_t dim=0;
 		if (dims) {
 			dim=dims[d];
 			if (dim<0) dim=0;
@@ -219,24 +234,20 @@ NumArrayInfo* CreateNumArrayInfoColMaj(int nDim, const int *dims, NumArrayType d
 
 
 void DeleteNumArrayInfo(NumArrayInfo* info) {
-	ckfree(info -> pitches);
-	ckfree(info -> dims);
-	ckfree(info);
+	free(info);
 }
 
 NumArrayInfo* DupNumArrayInfo(NumArrayInfo* src) {
 	/* Copy NumArrayInfo into new struct */
-	int i = 0, nDim = 0;
-	NumArrayInfo* result = ckalloc(sizeof(NumArrayInfo));
-	nDim = src -> nDim;
-	result -> nDim = nDim;
+	int i = 0;
+	int nDim = src -> nDim;
+
+	NumArrayInfo* result = AllocNumArrayInfo(nDim);
 	result -> canonical = src -> canonical;
 	result -> bufsize = src -> bufsize;
 	result -> type = src -> type;
 	result -> offset = src -> offset;
 
-	result -> dims = ckalloc(sizeof(int)*nDim);
-	result -> pitches = ckalloc(sizeof(int)*nDim);
 	for (i=0; i<nDim; i++) {
 		result -> dims[i] = src -> dims[i];
 		result -> pitches[i] = src -> pitches[i];
@@ -280,17 +291,17 @@ int NumArrayInfoSlice(Tcl_Interp *interp, NumArrayInfo *info, Tcl_Obj *slicelist
 			goto cleaninfo;
 		}
 
-		int start, stop, incr;
+		Tcl_WideInt start, stop, incr;
 
-		if (Tcl_GetIntFromObj(interp, elems[0], &start) != TCL_OK) {
+		if (Tcl_GetWideIntFromObj(interp, elems[0], &start) != TCL_OK) {
 			goto cleaninfo;
 		}
 
-		if (Tcl_GetIntFromObj(interp, elems[1], &stop) != TCL_OK) {
+		if (Tcl_GetWideIntFromObj(interp, elems[1], &stop) != TCL_OK) {
 			goto cleaninfo;
 		}
 
-		if (Tcl_GetIntFromObj(interp, elems[2], &incr) != TCL_OK) {
+		if (Tcl_GetWideIntFromObj(interp, elems[2], &incr) != TCL_OK) {
 			goto cleaninfo;
 		}
 
@@ -329,13 +340,13 @@ int NumArrayInfoSlice(Tcl_Interp *interp, NumArrayInfo *info, Tcl_Obj *slicelist
 
 		if (incr < 0) {
 			/* swap start and stop for negative increment */
-			int swap = start;
+			Tcl_WideInt swap = start;
 			start = stop; 
 			stop = swap;
 		}
 
 		/* Count number of elements in this dimension */
-		int nelem = (stop - start) / incr + 1;
+		index_t nelem = (stop - start) / incr + 1;
 		sliceinfo -> dims[d] = nelem;
 		sliceinfo -> offset += start * info->pitches[d];
 		sliceinfo -> pitches[d] = info -> pitches[d]*incr;
@@ -351,7 +362,7 @@ cleaninfo:
 	return TCL_ERROR;
 }
 
-int NumArrayInfoSlice1Axis(Tcl_Interp *interp, NumArrayInfo *info, int axis, int start, int stop, int incr) {
+int NumArrayInfoSlice1Axis(Tcl_Interp *interp, NumArrayInfo *info, int axis, index_t start, index_t stop, index_t incr) {
 	if (axis < 0 || axis >= info->nDim) {
 		Tcl_SetResult(interp, "Dimension mismatch.", NULL);
 		return TCL_ERROR;
@@ -392,13 +403,13 @@ int NumArrayInfoSlice1Axis(Tcl_Interp *interp, NumArrayInfo *info, int axis, int
 
 	if (incr < 0) {
 		/* swap start and stop for negative increment */
-		int swap = start;
+		index_t swap = start;
 		start = stop; 
 		stop = swap;
 	}
 
 	/* Count number of elements in this dimension */
-	int nelem = (stop - start) / incr + 1;
+	index_t nelem = (stop - start) / incr + 1;
 	info -> dims[axis] = nelem;
 	info -> offset += start * info->pitches[axis];
 	info -> pitches[axis] = info -> pitches[axis]*incr;
@@ -432,15 +443,17 @@ void NumArrayStripSingletonDimensions(NumArrayInfo *info) {
 
 
 /* A refcounted buffer */
-NumArraySharedBuffer *NumArrayNewSharedBuffer (int size) {
-	NumArraySharedBuffer* sharedbuf=ckalloc(sizeof(NumArraySharedBuffer));
+NumArraySharedBuffer *NumArrayNewSharedBuffer (size_t size) {
+	/* Alloc this buffer in one block */
+	char *baseptr = malloc(sizeof(NumArraySharedBuffer)+size);
+	NumArraySharedBuffer* sharedbuf= (NumArraySharedBuffer*) baseptr;
 	sharedbuf -> refcount = 0;
-	sharedbuf -> buffer	  = ckalloc(size);
+	sharedbuf -> buffer	  = baseptr + sizeof(NumArraySharedBuffer);
 	return sharedbuf;
 }
 
 void * NumArrayGetPtrFromSharedBuffer(NumArraySharedBuffer *sharedbuf) {
-	return sharedbuf -> buffer;
+	return (char*)sharedbuf + sizeof(NumArraySharedBuffer);
 }
 
 void NumArraySharedBufferIncrRefcount(NumArraySharedBuffer* sharedbuf) {
@@ -453,8 +466,7 @@ void NumArraySharedBufferDecrRefcount(NumArraySharedBuffer *sharedbuf) {
 	DEBUGPRINTF(("===%p NumArraySharedBufferDecrRefcount = %d\n", sharedbuf, sharedbuf->refcount));
 	if (sharedbuf->refcount <= 0) {
 		/* destroy this buffer */
-		ckfree(sharedbuf->buffer);
-		ckfree(sharedbuf);
+		free(sharedbuf);
 		DEBUGPRINTF(("===%p  deleted\n", sharedbuf));
 	}
 }
@@ -465,7 +477,7 @@ int NumArrayIsShared(NumArraySharedBuffer *sharedbuf) {
 
 /* Convenience to create a vector and 2D matrix */
 /* Functions to create a vector or matrix */
-Tcl_Obj *NumArrayNewVector(NumArrayType type, int m) {
+Tcl_Obj *NumArrayNewVector(NumArrayType type, index_t m) {
 	Tcl_Obj* result = Tcl_NewObj();
 	NumArrayInfo *info = CreateNumArrayInfo(1, &m, type);
 	NumArraySharedBuffer *sharedbuf = NumArrayNewSharedBuffer(info->bufsize);
@@ -473,9 +485,9 @@ Tcl_Obj *NumArrayNewVector(NumArrayType type, int m) {
 	return result;
 }
 
-Tcl_Obj *NumArrayNewMatrix(NumArrayType type, int m, int n) {
+Tcl_Obj *NumArrayNewMatrix(NumArrayType type, index_t m, index_t n) {
 	Tcl_Obj* result = Tcl_NewObj();
-	int dims[2];
+	index_t dims[2];
 	dims[0]=m; dims[1]=n;
 	NumArrayInfo *info = CreateNumArrayInfo(2, dims, type);
 	NumArraySharedBuffer *sharedbuf = NumArrayNewSharedBuffer(info->bufsize);
@@ -483,9 +495,9 @@ Tcl_Obj *NumArrayNewMatrix(NumArrayType type, int m, int n) {
 	return result;
 }
 
-Tcl_Obj *NumArrayNewMatrixColMaj(NumArrayType type, int m, int n) {
+Tcl_Obj *NumArrayNewMatrixColMaj(NumArrayType type, index_t m, index_t n) {
 	Tcl_Obj* result = Tcl_NewObj();
-	int dims[2];
+	index_t dims[2];
 	dims[0]=m; dims[1]=n;
 	NumArrayInfo *info = CreateNumArrayInfoColMaj(2, dims, type);
 	NumArraySharedBuffer *sharedbuf = NumArrayNewSharedBuffer(info->bufsize);
@@ -608,7 +620,7 @@ void NumArrayIteratorInit(NumArrayInfo *info, NumArraySharedBuffer *sharedbuf, N
 	it -> finished = 0;
 	it -> nDim = nDim;
 	it -> type = info -> type;
-	it -> dinfo = ckalloc(sizeof(NumArrayIteratorDimension)*(info->nDim+1));
+	it -> dinfo = malloc(sizeof(NumArrayIteratorDimension)*(info->nDim+1));
 
 	it->baseptr = (char *)NumArrayGetPtrFromSharedBuffer(sharedbuf)+info->offset;
 	it->ptr = it->baseptr;
@@ -659,13 +671,13 @@ void NumArrayIteratorInitColMaj(NumArrayInfo *info, NumArraySharedBuffer *shared
 	it -> finished = 0;
 	it -> nDim = nDim;
 	it -> type = info -> type;
-	it -> dinfo = ckalloc(sizeof(NumArrayIteratorDimension)*(info->nDim+1));
+	it -> dinfo = malloc(sizeof(NumArrayIteratorDimension)*(info->nDim+1));
 
 	it->baseptr = (char *)NumArrayGetPtrFromSharedBuffer(sharedbuf)+info->offset;
 
 	/* copy dimensional information into the 
 	 * iterators counter in reverse order, 
-	 * while stripping sngleton dimensions */
+	 * while stripping singleton dimensions */
 	int dfull; 
 	for (d=0, dfull=0; dfull < nDim; dfull++) {
 		/* strip singleton dimensions */
@@ -696,7 +708,7 @@ void NumArrayIteratorInitColMaj(NumArrayInfo *info, NumArraySharedBuffer *shared
 }
 
 void NumArrayIteratorFree(NumArrayIterator *it) {
-	ckfree(it->dinfo);
+	free(it->dinfo);
 }
 
 void* NumArrayIteratorReset(NumArrayIterator *it) {
@@ -769,15 +781,15 @@ void* NumArrayIteratorAdvanceRow(NumArrayIterator *it) {
 
 /* Retrieve pitch and
  * number of elements in the innermost loop */
-int NumArrayIteratorRowLength(NumArrayIterator *it) {
+index_t NumArrayIteratorRowLength(NumArrayIterator *it) {
 	return it->dinfo[0].dim;
 }
 
-int NumArrayIteratorRowPitch(NumArrayIterator *it) {
+index_t NumArrayIteratorRowPitch(NumArrayIterator *it) {
 	return it->dinfo[0].pitch;
 }
 
-int NumArrayIteratorRowPitchTyped(NumArrayIterator *it) {
+index_t NumArrayIteratorRowPitchTyped(NumArrayIterator *it) {
 	return it->dinfo[0].pitch / NumArrayType_SizeOf(it->type);
 }
 
@@ -790,7 +802,7 @@ void *NumArrayIteratorDeRefPtr(NumArrayIterator *it) {
 
 /* single dataype */
 NaWideInt NumArrayIteratorDeRefInt(NumArrayIterator *it) {
-	return *((int*) (it->ptr));
+	return *((NaWideInt*) (it->ptr));
 }
 
 double NumArrayIteratorDeRefDouble(NumArrayIterator *it) {
@@ -834,16 +846,16 @@ int NumArrayCopy(NumArrayInfo *srcinfo, NumArraySharedBuffer *srcbuf,
 	NumArrayIterator srcit, destit;
 	NumArrayIteratorInit(srcinfo, srcbuf, &srcit);
 	NumArrayIteratorInit(destinfo, destbuf, &destit);
-	const int srcpitch=NumArrayIteratorRowPitchTyped(&srcit);
-	const int destpitch=NumArrayIteratorRowPitchTyped(&destit);
-	const int length = NumArrayIteratorRowLength(&srcit);
+	const index_t srcpitch=NumArrayIteratorRowPitchTyped(&srcit);
+	const index_t destpitch=NumArrayIteratorRowPitchTyped(&destit);
+	const index_t length = NumArrayIteratorRowLength(&srcit);
 
 	#define COPYLOOP(TRES, T) \
 		if (destinfo->type == NATYPE_FROM_C(TRES) && srcinfo->type == NATYPE_FROM_C(T)) { \
 			TRES *result = NumArrayIteratorDeRefPtr(&destit); \
 			T* opptr = NumArrayIteratorDeRefPtr(&srcit); \
 			while (result) { \
-				int i; \
+				index_t i; \
 				for (i=0; i<length; i++) { \
 					*result = UPCAST(T, TRES, *opptr); \
 					opptr+=srcpitch; \
@@ -1038,15 +1050,15 @@ int NumArrayIndexInitObj(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayIndex *ind)
 	return TCL_OK;
 }
 
-void *NumArrayIndex1DGetPtr(NumArrayIndex *ind, int i) {
+void *NumArrayIndex1DGetPtr(NumArrayIndex *ind, index_t i) {
 	return ind->baseptr + i*ind->pitches[0];
 }
 
-void *NumArrayIndex2DGetPtr(NumArrayIndex *ind, int i, int j) {
+void *NumArrayIndex2DGetPtr(NumArrayIndex *ind, index_t i, index_t j) {
 	return ind->baseptr + i*ind->pitches[0] + j*ind->pitches[1];
 }
 
-void *NumArrayIndex3DGetPtr(NumArrayIndex *ind, int i, int j, int k) {
+void *NumArrayIndex3DGetPtr(NumArrayIndex *ind, index_t i, index_t j, index_t k) {
 	return ind->baseptr + i*ind->pitches[0] + j*ind->pitches[1]+ k*ind->pitches[2];
 }
 

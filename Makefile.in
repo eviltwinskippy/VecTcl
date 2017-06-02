@@ -89,7 +89,7 @@ INSTALL_OPTIONS	=
 INSTALL		= $(SHELL) $(srcdir)/tclconfig/install-sh -c ${INSTALL_OPTIONS}
 INSTALL_DATA_DIR = ${INSTALL} -d -m 755
 INSTALL_PROGRAM	= ${INSTALL} -m 555
-INSTALL_DATA	= ${INSTALL} -m 444
+INSTALL_DATA	= ${INSTALL} -m 644
 INSTALL_SCRIPT	= ${INSTALL_PROGRAM}
 INSTALL_LIBRARY	= ${INSTALL_DATA}
 
@@ -167,7 +167,7 @@ AR		= @AR@
 CFLAGS		= @CFLAGS@
 COMPILE		= $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
 
-.SUFFIXES: .c .$(OBJEXT)
+.SUFFIXES: .c .$(OBJEXT) .tcl.c .h .tcl.h
 
 #========================================================================
 # Start of user-definable TARGETS section
@@ -242,6 +242,11 @@ test: binaries libraries
 		-load "package ifneeded ${PACKAGE_NAME} ${PACKAGE_VERSION} \
 			[list load `@CYGPATH@ $(PKG_LIB_FILE)` $(PACKAGE_NAME)]"
 
+testgdb: binaries libraries
+	$(TCLSH_ENV) gdb --args $(TCLSH_PROG) `@CYGPATH@ $(srcdir)/tests/all.tcl` $(TESTFLAGS) \
+		-load "package ifneeded ${PACKAGE_NAME} ${PACKAGE_VERSION} \
+			[list load `@CYGPATH@ $(PKG_LIB_FILE)` $(PACKAGE_NAME)]"
+
 shell: binaries libraries
 	@$(TCLSH) $(SCRIPT)
 
@@ -257,8 +262,6 @@ valgrind: binaries libraries
 
 valgrindshell: binaries libraries
 	$(TCLSH_ENV) valgrind $(VALGRINDARGS) $(TCLSH_PROG) $(SCRIPT)
-
-depend:
 
 #========================================================================
 # $(PKG_LIB_FILE) should be listed as part of the BINARIES variable
@@ -297,7 +300,7 @@ $(PKG_STUB_LIB_FILE): $(PKG_STUB_OBJECTS)
 
 VPATH = $(srcdir):$(srcdir)/generic:$(srcdir)/unix:$(srcdir)/win:$(srcdir)/macosx
 
-.c.@OBJEXT@:
+%.@OBJEXT@: %.c
 	$(COMPILE) -c `@CYGPATH@ $<` -o $@
 
 # the parser must be created from the grammar, if it was changed
@@ -306,6 +309,25 @@ generic/vmparserules.h: generic/vexpr.peg
 	$(TCLSH_ENV) $(TCLSH_PROG) tools/parsergen.tcl $< $@
 
 vmparser.$(OBJEXT): generic/vmparserules.h
+
+$(srcdir)/generic/%.c: $(srcdir)/generic/%.tcl.c $(srcdir)/generic/defs.tcl
+	echo "Expanding" $< "to" $(<D)/$(@F)
+	$(TCLSH_ENV) $(TCLSH_PROG) tools/expand.tcl $< $(<D)/$(@F)
+
+$(srcdir)/generic/%.h: $(srcdir)/generic/%.tcl.h $(srcdir)/generic/defs.tcl
+	echo "Expanding" $< "to" $(<D)/$(@F)
+	$(TCLSH_ENV) $(TCLSH_PROG) tools/expand.tcl $< $(<D)/$(@F)
+
+deps = $(PKG_SOURCES:.c=.d) 
+
+depend: $(deps)
+
+%.d: %.c
+	rm -f $@
+	$(CC) $(CFLAGS) -MM $^ -MF $@;
+
+-include $(deps)
+
 
 #========================================================================
 # Distribution creation
@@ -361,7 +383,7 @@ dist: dist-clean
 
 clean:
 	-test -z "$(BINARIES)" || rm -f $(BINARIES)
-	-rm -f *.$(OBJEXT) core *.core
+	-rm -f *.$(OBJEXT) core *.core $(deps)
 	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 
 distclean: clean

@@ -2,8 +2,9 @@
  * it defines an elementwise binary operator
  * which works by iterating over all elements
  * for compatible operands */
+#include "compathack.h"
 #ifndef BINOP_LOOP
-typedef int (binop_loop_fun) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl_Obj *naObj2, Tcl_Obj **resultObj);
+typedef int (binop_loop_fun) (Tcl_Obj *naObj1, Tcl_Obj *naObj2, Tcl_Obj **resultObj);
 #define BINOP_LOOP_FUN(C, T1, T2) BINOP_LOOP_FUN1(C, T1, T2)
 #define BINOP_LOOP_FUN1(C, T1, T2) C##_loop_##T1##_##T2
 #define DECLARE_BINOP(T1, T2) static binop_loop_fun BINOP_LOOP_FUN(CMD, T1, T2)
@@ -13,6 +14,8 @@ typedef int (binop_loop_fun) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl_Obj *naOb
 #define LOOPTBL LOOPTABLE_IMP1(CMD)
 #define LOOPTABLE_IMP1(C) LOOPTABLE_IMP2(C)
 #define LOOPTABLE_IMP2(C) C##_table
+
+#define TCLCMDPROC(X) NUMARRAYTPASTER(X,Cmd)
 
 DECLARE_BINOP(NaWideInt, NaWideInt);
 DECLARE_BINOP(NaWideInt, double);
@@ -38,15 +41,18 @@ static binop_loop_fun * LOOPTBL[3][3] = {
 	}	
 };
 
+int CMD(Tcl_Obj* naObj1, Tcl_Obj* naObj2, Tcl_Obj **resultObj);
 
-int CMD( 
+MODULE_SCOPE
+int TCLCMDPROC(CMD) ( 
 		ClientData dummy,
 		Tcl_Interp *interp,
 		int objc,
 		Tcl_Obj *const *objv)
 {	
 	Tcl_Obj *naObj1, *naObj2, *resultObj;
-	NumArrayInfo *info1, *info2;
+
+	int resultcode;
 
 	if (objc != 3) {
 		Tcl_WrongNumArgs(interp, 1, objv, "numarray1 numarray2");
@@ -64,16 +70,27 @@ int CMD(
 		return TCL_ERROR;
 	}
 	
-	info1 = naObj1->internalRep.twoPtrValue.ptr2;
-	info2 = naObj2->internalRep.twoPtrValue.ptr2;
-
-	if (LOOPTBL[info1->type][info2->type](interp, naObj1, naObj2, &resultObj) != TCL_OK) {
-		return TCL_ERROR;
-	}
+	resultcode=CMD(naObj1, naObj2, &resultObj);
 	
 	Tcl_SetObjResult(interp, resultObj);
+	
+	return resultcode;
+}
 
-	return TCL_OK;
+int CMD(Tcl_Obj* naObj1, Tcl_Obj* naObj2, Tcl_Obj **resultObj) {
+
+	NumArrayInfo *info1, *info2;
+	info1 = naObj1->internalRep.twoPtrValue.ptr2;
+	info2 = naObj2->internalRep.twoPtrValue.ptr2;
+	/* map to int,double,complex - workaround
+	 * until we have the real implementation */
+	int ind1=NumArrayCompatTypeMap[info1->type];
+	int ind2=NumArrayCompatTypeMap[info2->type];
+	if (ind1 < 0 || ind2 < 0) {
+		*resultObj = Tcl_ObjPrintf("Operator undefined for types %s, %s", NumArray_typename[info1->type], NumArray_typename[info2->type]);
+		return TCL_ERROR;
+	}
+	return LOOPTBL[ind1][ind2](naObj1, naObj2, resultObj);
 }
 
 /* Implement the inner loop for the binary operators 
@@ -205,6 +222,7 @@ int CMD(
 #undef GETOP_IMP
 
 #undef CMD
+#undef TCLCMD
 #undef OP
 #undef OPINT
 #undef OPDBL

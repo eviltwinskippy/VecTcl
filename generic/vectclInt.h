@@ -15,18 +15,41 @@
 #define NUMARRAYTPASTER3(X, Y, Z) X##Y##Z
 #define NUMARRAYTPASTER4(X, Y, Z, W) X##Y##Z##W
 
-extern const char * NumArray_typename[NumArray_SentinelType];
+extern const char * NumArray_typename[NumArray_SentinelType+1];
+extern const char * NumArray_typesuffixes[NumArray_SentinelType+1];
 
 /* Macros for preprocessor magic
  * Convert between C type and numeric array type */
 
-#define C_FROM_NATYPE_NumArray_Int NaWideInt;
+#define C_FROM_NATYPE_NumArray_Int NaWideInt
+#define C_FROM_NATYPE_NumArray_Bool int
+#define C_FROM_NATYPE_NumArray_Int8 int8_t
+#define C_FROM_NATYPE_NumArray_Uint8 uint8_t
+#define C_FROM_NATYPE_NumArray_Int16 int16_t
+#define C_FROM_NATYPE_NumArray_Uint16 uint16_t
+#define C_FROM_NATYPE_NumArray_Int32 int32_t
+#define C_FROM_NATYPE_NumArray_Uint32 uint32_t
+#define C_FROM_NATYPE_NumArray_Int64 int64_t
+#define C_FROM_NATYPE_NumArray_Uint64 uint64_t
+#define C_FROM_NATYPE_NumArray_Float32 float
 #define C_FROM_NATYPE_NumArray_Float64 double
+#define C_FROM_NATYPE_NumArray_Complex64 NumArray_ComplexFloat
 #define C_FROM_NATYPE_NumArray_Complex128 NumArray_Complex
 
 #define NATYPE_FROM_C_NaWideInt NumArray_Int
+#define NATYPE_FROM_C_int8_t NumArray_Int8
+#define NATYPE_FROM_C_uint8_t NumArray_Uint8
+#define NATYPE_FROM_C_int16_t NumArray_Int16
+#define NATYPE_FROM_C_uint16_t NumArray_Uint16
+#define NATYPE_FROM_C_int32_t NumArray_Int32
+#define NATYPE_FROM_C_uint32_t NumArray_Uint32
+#define NATYPE_FROM_C_int64_t NumArray_Int64
+#define NATYPE_FROM_C_uint64_t NumArray_Uint64
+#define NATYPE_FROM_C_float NumArray_Float32
 #define NATYPE_FROM_C_double NumArray_Float64
+#define NATYPE_FROM_C_NumArray_ComplexFloat NumArray_Complex64
 #define NATYPE_FROM_C_NumArray_Complex NumArray_Complex128
+
 
 #define C_FROM_NATYPE(X) NUMARRAYTPASTER(C_FROM_NATYPE_, X)
 #define NATYPE_FROM_C(X) NUMARRAYTPASTER(NATYPE_FROM_C_, X)
@@ -85,6 +108,10 @@ SUBCOMMAND(NumArrayGetCmd);
 SUBCOMMAND(NumArrayFastCopyCmd);
 SUBCOMMAND(NumArrayFastAddCmd);
 SUBCOMMAND(NumArrayLinRegCmd);
+SUBCOMMAND(NumArrayConvIntCmd);
+#define CONVERTER(X) SUBCOMMAND(NumArrayConv ## X ## Cmd);
+MAP(CONVERTER, Bool, Int8, Uint8, Int16, Uint16, Int32, Uint32, Int64, Uint64, Float32, Float64, Complex64, Complex128)
+#undef CONVERTER
 SUBCOMMAND(NumArrayConvDoubleCmd);
 SUBCOMMAND(NumArrayConvComplexCmd);
 SUBCOMMAND(NumArrayAbsCmd);
@@ -131,6 +158,7 @@ SUBCOMMAND(NumArrayCosCmd);
 SUBCOMMAND(NumArrayTanCmd);
 SUBCOMMAND(NumArrayExpCmd);
 SUBCOMMAND(NumArrayLogCmd);
+SUBCOMMAND(NumArrayLog10Cmd);
 SUBCOMMAND(NumArraySqrtCmd);
 SUBCOMMAND(NumArraySinhCmd);
 SUBCOMMAND(NumArrayCoshCmd);

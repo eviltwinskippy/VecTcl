@@ -1,12 +1,12 @@
 #define TUP UPCAST_COMMON(T1, T2)
 /* for scalar values, take the first value as 
  * the constant and operate over the second field */
-static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl_Obj *naObj2, Tcl_Obj **resultObj) {
+static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Obj *naObj1, Tcl_Obj *naObj2, Tcl_Obj **resultObj) {
 	NumArrayInfo *info1 = naObj1->internalRep.twoPtrValue.ptr2;
 	NumArrayInfo *info2 = naObj2->internalRep.twoPtrValue.ptr2;
 	
 	#ifndef OP
-	RESULTPRINTF(("Operator undefined for types %s, %s", NumArray_typename[info1->type], NumArray_typename[info2->type]));
+	*resultObj = Tcl_ObjPrintf("Operator undefined for types %s, %s", NumArray_typename[info1->type], NumArray_typename[info2->type]);
 	return TCL_ERROR;
 	#else 
 	
@@ -14,7 +14,7 @@ static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl
 	if (!NumArrayCompatibleDimensions(info1, info2) && 
 		!ISSCALARINFO(info1)  && !ISSCALARINFO(info2)) {
 
-		Tcl_SetResult(interp, "incompatible operands", NULL);
+		*resultObj = Tcl_NewStringObj("incompatible operands", -1);
 		return TCL_ERROR;
 	}
 
@@ -45,15 +45,15 @@ static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl
 	NumArrayIteratorInitObj(NULL, naObj1, &it1);
 	NumArrayIteratorInitObj(NULL, naObj2, &it2);
 	
-	const int pitch = sizeof(TRES);
+	const index_t pitch = sizeof(TRES);
 	if (ISSCALARINFO(info1)) {
 		T1 *op1ptr = NumArrayIteratorDeRefPtr(&it1);
 		TUP op1 = UPCAST(T1, TUP, *op1ptr);
 		T2 *op2ptr = NumArrayIteratorDeRefPtr(&it2);
-		const int op2pitch = NumArrayIteratorRowPitchTyped(&it2);
-		const int length = NumArrayIteratorRowLength(&it2);
+		const index_t op2pitch = NumArrayIteratorRowPitchTyped(&it2);
+		const index_t length = NumArrayIteratorRowLength(&it2);
 		while (op2ptr) {
-			int i;
+			index_t i;
 			for (i=0; i<length; i++) {
 				TRES *result = (TRES *)bufptr;
 				bufptr += pitch;
@@ -67,10 +67,10 @@ static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl
 		T1 *op1ptr = NumArrayIteratorDeRefPtr(&it1);
 		T2 *op2ptr = NumArrayIteratorDeRefPtr(&it2);
 		TUP op2 = UPCAST(T2, TUP, *op2ptr);
-		const int op1pitch = NumArrayIteratorRowPitchTyped(&it1);
-		const int length = NumArrayIteratorRowLength(&it1);
+		const index_t op1pitch = NumArrayIteratorRowPitchTyped(&it1);
+		const index_t length = NumArrayIteratorRowLength(&it1);
 		while (op1ptr) {
-			int i;
+			index_t i;
 			for (i=0; i<length; i++) {
 				TRES *result = (TRES *)bufptr;
 				bufptr += pitch;
@@ -84,13 +84,13 @@ static int BINOP_LOOP_FUN(CMD, T1, T2) (Tcl_Interp *interp, Tcl_Obj *naObj1, Tcl
 	} else {
 
 		T1 *op1ptr = NumArrayIteratorDeRefPtr(&it1);
-		const int op1pitch = NumArrayIteratorRowPitchTyped(&it1);
+		const index_t op1pitch = NumArrayIteratorRowPitchTyped(&it1);
 		T2 *op2ptr = NumArrayIteratorDeRefPtr(&it2);
-		const int op2pitch = NumArrayIteratorRowPitchTyped(&it2);
-		const int length = NumArrayIteratorRowLength(&it1);
+		const index_t op2pitch = NumArrayIteratorRowPitchTyped(&it2);
+		const index_t length = NumArrayIteratorRowLength(&it1);
 		
 		while (op1ptr) {
-			int i;
+			index_t i;
 			for (i=0; i<length; i++) {
 				TRES *result = (TRES *)bufptr;
 				bufptr += pitch;

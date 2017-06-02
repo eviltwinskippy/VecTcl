@@ -4,6 +4,11 @@
 #include <math.h>
 
 typedef struct {
+	float re;
+	float im;
+} NumArray_ComplexFloat;
+
+typedef struct {
 	double re;
 	double im;
 } NumArray_Complex;
@@ -25,6 +30,13 @@ int Complex_Init(Tcl_Interp *interp);
 /* Simple constructor. Hopefully optimized out */
 static inline NumArray_Complex NumArray_mkComplex(double re, double im) {
 	NumArray_Complex result;
+	result.re = re;
+	result.im = im;
+	return result;
+}
+
+static inline NumArray_ComplexFloat NumArray_mkComplexFloat(float re, float im) {
+	NumArray_ComplexFloat result;
 	result.re = re;
 	result.im = im;
 	return result;

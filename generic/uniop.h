@@ -2,27 +2,45 @@
  * it defines an elementwise binary operator
  * which works by iterating over all elements
  * for compatible operands */
-int CMD( 
+
+#define TCLCMDPROC(X) NUMARRAYTPASTER(X,Cmd)
+
+int CMD(Tcl_Obj* naObj, Tcl_Obj **resultObj);
+
+MODULE_SCOPE
+int TCLCMDPROC(CMD) ( 
 		ClientData dummy,
 		Tcl_Interp *interp,
 		int objc,
 		Tcl_Obj *const *objv)
 {	
 	Tcl_Obj *naObj, *resultObj;
-	NumArrayInfo *info, *resultinfo;
-	NumArraySharedBuffer *resultbuf;
+	int resultcode;
 
 	if (objc != 2) {
 		Tcl_WrongNumArgs(interp, 1, objv, "numarray");
 		return TCL_ERROR;
 	}
-	
+
     naObj = objv[1];
-	
+
 	if (Tcl_ConvertToType(interp, naObj, &NumArrayTclType) != TCL_OK) {
 		return TCL_ERROR;
 	}
 
+	resultcode=CMD(naObj, &resultObj);
+	
+	Tcl_SetObjResult(interp, resultObj);
+
+	return resultcode;
+}
+
+
+int CMD(Tcl_Obj* naObj, Tcl_Obj **resultObj) {
+
+	NumArrayInfo *info, *resultinfo;
+	NumArraySharedBuffer *resultbuf;
+	
 	info = naObj->internalRep.twoPtrValue.ptr2;
 	
 	NumArrayIterator it;
@@ -40,11 +58,11 @@ int CMD(
 			resultbuf = NumArrayNewSharedBuffer(resultinfo -> bufsize);
 			DBLRES *result = (DBLRES*) NumArrayGetPtrFromSharedBuffer(resultbuf);
 		
-			const int srcpitch=NumArrayIteratorRowPitchTyped(&it);
-			const int length = NumArrayIteratorRowLength(&it);
+			const index_t srcpitch=NumArrayIteratorRowPitchTyped(&it);
+			const index_t length = NumArrayIteratorRowLength(&it);
 			double* opptr = NumArrayIteratorDeRefPtr(&it);
 			while (opptr) {
-				int i;
+				index_t i;
 				for (i=0; i<length; i++) {
 					double op = *opptr;
 					DBLOP;
@@ -67,11 +85,11 @@ int CMD(
 			resultbuf = NumArrayNewSharedBuffer(resultinfo -> bufsize);
 			INTRES *result = (INTRES*) NumArrayGetPtrFromSharedBuffer(resultbuf);
 
-			const int srcpitch=NumArrayIteratorRowPitchTyped(&it);
-			const int length = NumArrayIteratorRowLength(&it);
+			const index_t srcpitch=NumArrayIteratorRowPitchTyped(&it);
+			const index_t length = NumArrayIteratorRowLength(&it);
 			NaWideInt* opptr = NumArrayIteratorDeRefPtr(&it);
 			while (opptr) {
-				int i;
+				index_t i;
 				for (i=0; i<length; i++) {
 					NaWideInt op = *opptr;
 					INTOP;
@@ -94,11 +112,11 @@ int CMD(
 			resultbuf = NumArrayNewSharedBuffer(resultinfo -> bufsize);
 			CPLXRES *result = (CPLXRES*) NumArrayGetPtrFromSharedBuffer(resultbuf);
 		
-			const int srcpitch=NumArrayIteratorRowPitchTyped(&it);
-			const int length = NumArrayIteratorRowLength(&it);
+			const index_t srcpitch=NumArrayIteratorRowPitchTyped(&it);
+			const index_t length = NumArrayIteratorRowLength(&it);
 			NumArray_Complex* opptr = NumArrayIteratorDeRefPtr(&it);
 			while (opptr) {
-				int i;
+				index_t i;
 				for (i=0; i<length; i++) {
 					NumArray_Complex op = *opptr;
 					CPLXOP;
@@ -115,18 +133,18 @@ int CMD(
 
 		default:
 			
-			RESULTPRINTF(("Undefined function for datatype %s", NumArray_typename[info->type]));
+			*resultObj = Tcl_ObjPrintf("Undefined function for datatype %s", NumArray_typename[info->type]);
             return TCL_ERROR;
 	}
 
-	resultObj=Tcl_NewObj();
-	NumArraySetInternalRep(resultObj, resultbuf, resultinfo);
-	Tcl_SetObjResult(interp, resultObj);
+	*resultObj=Tcl_NewObj();
+	NumArraySetInternalRep(*resultObj, resultbuf, resultinfo);
 
 	return TCL_OK;
 }
 
 #undef CMD
+#undef TCLCMDPROC
 
 #undef INTOP
 #undef INTRES

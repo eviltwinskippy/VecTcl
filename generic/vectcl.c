@@ -11,6 +11,7 @@
 #include "schur.h"
 #include "bcexecute.h"
 #include "vmparser.h"
+#include "intconv.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -65,15 +66,15 @@ const Tcl_ObjType * tclWideIntType;
 
 Tcl_SetFromAnyProc *listSetFromAny;
 
-const char * NumArray_typename[NumArray_SentinelType]={
-	"int", "double",  "complex" };
+const char * NumArray_typename[NumArray_SentinelType+1]=NUMARRAYTYPESTRINGS;
+//const char * NumArray_typesuffixes[NumArray_SentinelType+1]=NUMARRAYTYPESUFFIXES;
 
 static int CreateNumArrayInfoFromList(Tcl_Interp *interp, Tcl_Obj* dimlist, NumArrayType dtype, NumArrayInfo **infoptr) {
 	/* Create information with dimensions as in dimlist
 	 * TODO catch out of memory */
 	int d = 0;
 	int nDim;
-	int *dims = NULL;
+	index_t *dims = NULL;
 	
 	if (Tcl_ListObjLength(interp, dimlist, &nDim) != TCL_OK) {
 		return TCL_ERROR;
@@ -84,13 +85,13 @@ static int CreateNumArrayInfoFromList(Tcl_Interp *interp, Tcl_Obj* dimlist, NumA
 		return TCL_ERROR;
 	}
 	
-	dims = ckalloc(sizeof(int)*nDim);
+	dims = ckalloc(sizeof(index_t)*nDim);
 
 	for (d=0; d<nDim; d++) {
-		int dim;
+		Tcl_WideInt dim;
 		Tcl_Obj *dimObj;
 		Tcl_ListObjIndex(NULL, dimlist, d, &dimObj); /* can't fail */
-		if (Tcl_GetIntFromObj(interp, dimObj, &dim) != TCL_OK) {
+		if (Tcl_GetWideIntFromObj(interp, dimObj, &dim) != TCL_OK) {
 			goto cleandims;
 		}
 		
@@ -172,6 +173,21 @@ static const EnsembleMap implementationMap[] = {
 	{"concat", NumArrayConcatCmd, NULL},
 	{"diag", NumArrayDiagCmd, NULL},
 	/* data type conversion operators */
+	{"int", NumArrayConvIntCmd, NULL},
+	{"bool", NumArrayConvBoolCmd, NULL},
+	{"int8", NumArrayConvInt8Cmd, NULL},
+	{"uint8", NumArrayConvUint8Cmd, NULL},
+	{"int16", NumArrayConvInt16Cmd, NULL},
+	{"uint16", NumArrayConvUint16Cmd, NULL},
+	{"int32", NumArrayConvInt32Cmd, NULL},
+	{"uint32", NumArrayConvUint32Cmd, NULL},
+	{"int64", NumArrayConvInt64Cmd, NULL},
+	{"uint64", NumArrayConvUint64Cmd, NULL},
+	{"float32", NumArrayConvFloat32Cmd, NULL},
+	{"float64", NumArrayConvFloat64Cmd, NULL},
+	{"complex64", NumArrayConvComplex64Cmd, NULL},
+	{"complex128", NumArrayConvComplex128Cmd, NULL},
+
 	{"double", NumArrayConvDoubleCmd, NULL},
 	{"complex", NumArrayConvComplexCmd, NULL},
 	/* elementary manipulations of complex values*/
@@ -229,6 +245,7 @@ static const EnsembleMap implementationMap[] = {
 	{"tan", NumArrayTanCmd, NULL},
 	{"exp", NumArrayExpCmd, NULL},
 	{"log", NumArrayLogCmd, NULL},
+	{"log10", NumArrayLog10Cmd, NULL},
 	{"sqrt", NumArraySqrtCmd, NULL},
 	{"sinh", NumArraySinhCmd, NULL},
 	{"cosh", NumArrayCoshCmd, NULL},
@@ -439,12 +456,12 @@ NumArrayConstFillCmd(
 	}
 	
 	int ndim = objc-2;
-	int *dims = ckalloc(sizeof(int)*ndim);
-	int nelem = 1;
+	index_t *dims = ckalloc(sizeof(index_t)*ndim);
+	index_t nelem = 1;
 	int d;
 	for (d=0; d<ndim; d++) {
-		int dim;
-		if (Tcl_GetIntFromObj(interp, objv[2+d], &dim) != TCL_OK) {
+		Tcl_WideInt dim;
+		if (Tcl_GetWideIntFromObj(interp, objv[2+d], &dim) != TCL_OK) {
 			goto cleandims;
 		}
 		/* only the first dim can be zero (for empty vector) */
@@ -466,7 +483,7 @@ NumArrayConstFillCmd(
 
 	/* Fill the buffer */
 	double *bufptr = (double*) NumArrayGetPtrFromSharedBuffer(sharedbuf);
-	int i;
+	index_t i;
 	for (i=0; i<nelem; i++) {
 		bufptr[i] = value;
 	}
@@ -492,7 +509,7 @@ NumArrayEyeCmd(
 		Tcl_Obj *const *objv)
 {
 	Tcl_Obj *naObj;
-	int m, n;
+	index_t m, n;
 	NumArrayInfo *info; 
 	NumArraySharedBuffer *sharedbuf;
 
@@ -501,16 +518,19 @@ NumArrayEyeCmd(
 		return TCL_ERROR;
 	}
 	
-	if (Tcl_GetIntFromObj(interp, objv[1], &m) != TCL_OK) {
+	Tcl_WideInt temp;
+	if (Tcl_GetWideIntFromObj(interp, objv[1], &temp) != TCL_OK) {
 		return TCL_ERROR;
 	}
+	m=temp;
 
 	if (objc == 2) {
 		n=m; 
 	} else {
-		if (Tcl_GetIntFromObj(interp, objv[2], &n) != TCL_OK) {
+		if (Tcl_GetWideIntFromObj(interp, objv[2], &temp) != TCL_OK) {
 			return TCL_ERROR;
 		}
+		n=temp;
 	}
 
 	if (m<0 || n<0) {
@@ -518,16 +538,16 @@ NumArrayEyeCmd(
 		return TCL_ERROR;
 	}
 
-	int *dims = ckalloc(sizeof(int)*2);
+	index_t *dims = ckalloc(sizeof(index_t)*2);
 	dims[0]=m; dims[1]=n;
 	info = CreateNumArrayInfo((n==1)? 1:2, dims, NumArray_Float64);
 	sharedbuf = NumArrayNewSharedBuffer(info->bufsize);
 
 	/* Fill the buffer */
 	double *bufptr = (double*) NumArrayGetPtrFromSharedBuffer(sharedbuf);
-	int i;
+	index_t i;
 	for (i=0; i<m; i++) {
-		int j; 
+		index_t j; 
 		for (j=0; j<n; j++) {
 			*bufptr++ = ((i==j)?1.0:0.0);
 		}
@@ -571,20 +591,20 @@ NumArrayInfoCmd(
 
 	plist = Tcl_NewObj();
 	for (i=0; i<info->nDim; i++) {
-		Tcl_ListObjAppendElement(interp, plist,  Tcl_NewIntObj(info->dims[i]));
+		Tcl_ListObjAppendElement(interp, plist,  Tcl_NewWideIntObj(info->dims[i]));
 	}
 	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("dimensions", -1), plist);
 	
-	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("offset", -1), Tcl_NewIntObj(info->offset));
+	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("offset", -1), Tcl_NewWideIntObj(info->offset));
 
 	plist = Tcl_NewObj();
 	for (i=0; i<info->nDim; i++) {
-		Tcl_ListObjAppendElement(interp, plist,  Tcl_NewIntObj(info->pitches[i]));
+		Tcl_ListObjAppendElement(interp, plist,  Tcl_NewWideIntObj(info->pitches[i]));
 	}
 	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("pitches", -1), plist);
 	
 	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("canonical", -1), Tcl_NewBooleanObj(info->canonical));
-	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("bufsize", -1), Tcl_NewIntObj(info->bufsize));
+	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("bufsize", -1), Tcl_NewWideIntObj(info->bufsize));
 	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("refcount", -1), Tcl_NewIntObj(sharedbuf->refcount));
 	Tcl_DictObjPut(interp, infodict, Tcl_NewStringObj("type", -1), Tcl_NewIntObj(info->type));
 
@@ -622,11 +642,15 @@ NumArrayGetCmd(
 		return TCL_ERROR;
 	}
 
+	
 	for (d=0; d < info->nDim; d++) {
-		int ind;
-		if (Tcl_GetIntFromObj(interp, objv[d+2], &ind) != TCL_OK) {
+		index_t ind;
+		Tcl_WideInt temp;
+		if (Tcl_GetWideIntFromObj(interp, objv[d+2], &temp) != TCL_OK) {
 			return TCL_ERROR;
 		}
+		ind=temp;
+
 		/* negative index counts backward from the end */
 		if (ind < 0) {
 			ind += info->dims[d];
@@ -716,10 +740,12 @@ NumArraySetCmd(
 
 	/* compute index into buffer */
 	for (d=0; d<info->nDim; d++) {
-		int index;
-		if (Tcl_GetIntFromObj(interp, objv[d+2], &index) != TCL_OK) { 
+		index_t index;
+		Tcl_WideInt temp;
+		if (Tcl_GetWideIntFromObj(interp, objv[d+2], &temp) != TCL_OK) { 
 			goto cleanobj;
 		}
+		index=temp;
 
 		if (index<0 || index >= info->dims[d]) {
 			Tcl_SetResult(interp, "Index out of range.", NULL);
@@ -742,8 +768,8 @@ NumArraySetCmd(
 			break;
 		}
 		case NumArray_Int: {
-			long temp;
-			if (Tcl_GetLongFromObj(interp, objv[objc-1], &temp) != TCL_OK) {
+			Tcl_WideInt temp;
+			if (Tcl_GetWideIntFromObj(interp, objv[objc-1], &temp) != TCL_OK) {
 				goto cleanobj;
 			}
 
@@ -929,16 +955,16 @@ int NumArrayLinRegCmd(
 		return TCL_ERROR;
 	}	
 
-	int length = xvalinfo->dims[0];
-	int xpitch = xvalinfo->pitches[0]/sizeof(double);
-	int ypitch = yvalinfo->pitches[0]/sizeof(double);
+	index_t length = xvalinfo->dims[0];
+	index_t xpitch = xvalinfo->pitches[0]/sizeof(double);
+	index_t ypitch = yvalinfo->pitches[0]/sizeof(double);
 
 	/* add value to dest by simple loop */
 	double *x= (double *)NumArrayGetPtrFromSharedBuffer(xbuf);
 	double *y= (double *)NumArrayGetPtrFromSharedBuffer(ybuf);
 	
 	/* Now compute the mean values */
-	int i;
+	index_t i;
 	double xm=0.0; double ym=0.0;
 	for (i=0; i<length; i++) {
 		xm+=x[i*xpitch]; 
@@ -1049,7 +1075,7 @@ int NumArrayFastAddCmd(
 	}
 
 	/* Compute number of elements */
-	int nelem=1;
+	index_t nelem=1;
 	for (d=0; d<info->nDim; d++) {
 		nelem *= info->dims[d];
 	}
@@ -1058,7 +1084,7 @@ int NumArrayFastAddCmd(
 	double *dest= (double *)NumArrayGetPtrFromSharedBuffer(sharedbuf);
 	double *src= (double *)NumArrayGetPtrFromSharedBuffer(valuebuf);
 	
-	int i;
+	index_t i;
 	for (i=0; i<nelem; i++) {
 		(*dest++)+=*src++;
 	}
@@ -1087,7 +1113,7 @@ NumArrayReshapeCmd(
 {
 	Tcl_Obj *naObj;
 	NumArrayInfo *info; NumArrayInfo *reshapeinfo;
-	int i; int nelem=1; int reshapenelem=1; int reshapedim;
+	int i; index_t nelem=1; index_t reshapenelem=1; int reshapedim;
 	int allocobj = 0;
 
 	if (objc < 3) {
@@ -1209,7 +1235,7 @@ ScanNumArrayDimensionsFromValue(Tcl_Interp *interp, Tcl_Obj* valobj, Tcl_Obj **r
 		int d;
 		NumArrayInfo *info = valobj -> internalRep.twoPtrValue.ptr2;
 		for (d=0; d<info->nDim; d++) {
-			Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewIntObj(info->dims[d]));
+			Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewWideIntObj(info->dims[d]));
 		}
 		*result=dimlist;
 		*dtype = info->type;
@@ -1222,7 +1248,7 @@ ScanNumArrayDimensionsFromValue(Tcl_Interp *interp, Tcl_Obj* valobj, Tcl_Obj **r
 	}
 
 	if (firstdim == 0) {
-		Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewIntObj(0));
+		Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewWideIntObj(0));
 		*result=dimlist;
 		*dtype=NumArray_Int;
 		return TCL_OK;
@@ -1246,7 +1272,7 @@ ScanNumArrayDimensionsFromValue(Tcl_Interp *interp, Tcl_Obj* valobj, Tcl_Obj **r
 			/* else just break out of the loop */
 			if (nDim==0) {
 				nDim=1;
-				Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewIntObj(1));
+				Tcl_ListObjAppendElement(interp, dimlist, Tcl_NewWideIntObj(1));
 			}
 			if (itobj -> typePtr == tclDoubleType) {
 				*dtype = NumArray_Float64;
@@ -1390,7 +1416,7 @@ NumArrayShapeCmd(
 	Tcl_Obj *result = Tcl_NewObj();
 	int d;
 	for (d=0; d<info->nDim; d++) {
-		Tcl_ListObjAppendElement(interp, result,  Tcl_NewIntObj(info->dims[d]));
+		Tcl_ListObjAppendElement(interp, result,  Tcl_NewWideIntObj(info->dims[d]));
 	}
 	Tcl_SetObjResult(interp, result);
 	return TCL_OK;
@@ -1645,6 +1671,31 @@ cleanobj:
 	return TCL_ERROR;
 }
 
+#define CONVERTER(TYPE) \
+int NumArrayConv ## TYPE ## Cmd(\
+		ClientData dummy,\
+		Tcl_Interp *interp,\
+		int objc,\
+		Tcl_Obj *const *objv)\
+{\
+	if (objc != 2) {\
+		Tcl_WrongNumArgs(interp, 1, objv, "numarray");\
+		return TCL_ERROR;\
+	}\
+\
+	Tcl_Obj *result;\
+	Tcl_Obj *naObj = objv[1];\
+\
+	if (NumArrayConvertToType(interp, naObj, NumArray_ ## TYPE, &result) != TCL_OK) {\
+		return TCL_ERROR;\
+	}\
+	Tcl_SetObjResult(interp, result);\
+	return TCL_OK;\
+}
+
+MAP(CONVERTER, Int8, Uint8, Int16, Uint16, Int32, Uint32, Int64, Uint64, Float32, Float64, Complex64, Complex128, Bool)
+
+#undef CONVERTER
 /* createNumArraySharedBufferFromTypedList
  * 
  * Expect a nested list representation compatible with info 
@@ -1664,10 +1715,10 @@ static int createNumArraySharedBufferFromTypedList(Tcl_Interp *interp, Tcl_Obj *
 
 	/* in a canonical array, the innermost pitch 
 	 * is space between adjacent elements */
-	int pitch = info -> pitches[nDim-1];
+	index_t pitch = info -> pitches[nDim-1];
 
 	/* loop over data. Create a counter */
-	int *counter = ckalloc(sizeof(int)*nDim);
+	index_t *counter = ckalloc(sizeof(index_t)*nDim);
 	int d;
 	for (d=0; d<nDim; d++) { counter[d]=0; }
 	
@@ -1691,8 +1742,8 @@ static int createNumArraySharedBufferFromTypedList(Tcl_Interp *interp, Tcl_Obj *
 		/* store the current element to shared buffer */
 		switch (info->type) {
 			case NumArray_Int: {
-				long temp;
-				if (Tcl_GetLongFromObj(interp, matroska[nDim], &temp) != TCL_OK) {
+				Tcl_WideInt temp;
+				if (Tcl_GetWideIntFromObj(interp, matroska[nDim], &temp) != TCL_OK) {
 					goto cleanbuffer;
 				}
 				*(NaWideInt *) bufptr = temp;
@@ -1715,7 +1766,7 @@ static int createNumArraySharedBufferFromTypedList(Tcl_Interp *interp, Tcl_Obj *
 			default:
 				/* Error */
 				printf("Unknown data type\n");
-				exit(-1);
+				goto cleanbuffer;
 		} /* end of switch datatype */
 
 		/* advance the count
@@ -1813,7 +1864,7 @@ static void UpdateStringOfNumArray(Tcl_Obj *naPtr) {
 	char *buffer=NULL;
 
 	int nDim = info -> nDim;
-	int *counter = ckalloc(sizeof(int)*nDim);
+	index_t *counter = ckalloc(sizeof(index_t)*nDim);
 	char **baseptr = ckalloc(sizeof(char*)*nDim);
 
 	int d=0; /* d is the dimension counter */
@@ -1854,12 +1905,116 @@ static void UpdateStringOfNumArray(Tcl_Obj *naPtr) {
 
 		/* Print this element */
 		switch (info -> type) {
+		/* handle integers */
+		
 			case NumArray_Int:
 				{
-					char intbuf[TCL_INTEGER_SPACE];
-					long el = *((NaWideInt *) (baseptr[nDim-1]));
-					snprintf(intbuf, TCL_INTEGER_SPACE, "%ld", el);
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					int64_t el = *(NaWideInt *) (baseptr[nDim-1]);
+					int len = format_int64(el, intbuf);
+					
 					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Bool:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					uint64_t el = *(int *) (baseptr[nDim-1]);
+					int len = format_bool(el, intbuf);
+					
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Int8:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					int64_t el = *(int8_t *) (baseptr[nDim-1]);
+					int len = format_int64(el, intbuf);
+					 strncpy(intbuf+len, "i8", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Uint8:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					uint64_t el = *(uint8_t *) (baseptr[nDim-1]);
+					int len = format_uint64(el, intbuf);
+					 strncpy(intbuf+len, "u8", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Int16:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					int64_t el = *(int16_t *) (baseptr[nDim-1]);
+					int len = format_int64(el, intbuf);
+					 strncpy(intbuf+len, "i16", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Uint16:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					uint64_t el = *(uint16_t *) (baseptr[nDim-1]);
+					int len = format_uint64(el, intbuf);
+					 strncpy(intbuf+len, "u16", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Int32:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					int64_t el = *(int32_t *) (baseptr[nDim-1]);
+					int len = format_int64(el, intbuf);
+					 strncpy(intbuf+len, "i32", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Uint32:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					uint64_t el = *(uint32_t *) (baseptr[nDim-1]);
+					int len = format_uint64(el, intbuf);
+					 strncpy(intbuf+len, "u32", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Int64:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					int64_t el = *(int64_t *) (baseptr[nDim-1]);
+					int len = format_int64(el, intbuf);
+					 strncpy(intbuf+len, "i64", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+			case NumArray_Uint64:
+				{
+					char intbuf[NA_INTSPACE+MAX_SUFFIX];
+					uint64_t el = *(uint64_t *) (baseptr[nDim-1]);
+					int len = format_uint64(el, intbuf);
+					 strncpy(intbuf+len, "u64", MAX_SUFFIX); 
+					Tcl_DStringAppendElement(&srep, intbuf);
+					break;
+				}
+				
+
+			case NumArray_Float32:
+				{
+					char dblbuf[TCL_DOUBLE_SPACE+1];
+					float elptr = *(float *) (baseptr[nDim-1]);
+					Tcl_PrintDouble(NULL, elptr, dblbuf);
+					Tcl_DStringAppendElement(&srep, dblbuf);
+					Tcl_DStringAppend(&srep, "f", 1);
 					break;
 				}
 			case NumArray_Float64:
@@ -1974,8 +2129,8 @@ static int SetListFromNumArray(Tcl_Interp *interp, Tcl_Obj *objPtr) {
 	} else {
 		/* multidimensional case: create slices for each 
 		 * row and add to list */
-		int i;
-		int nelem = info -> dims[0];
+		index_t i;
+		index_t nelem = info -> dims[0];
 		for (i=0; i< nelem; i++) {
 			Tcl_Obj *slice=Tcl_NewObj();
 			NumArrayInfo *sliceinfo=DupNumArrayInfo(info);
@@ -2039,40 +2194,40 @@ static inline double fsign(double x) {
 
 
 /* Implement elementwise binary operators */
-#define CMD NumArrayPlusCmd
+#define CMD NumArrayPlus
 #define OPINT *result = op1 + op2;
 #define OPDBL *result = op1 + op2;
 #define OPCPLX *result = NumArray_ComplexAdd(op1, op2);
 #include "binop.h"
 
-#define CMD NumArrayMinusCmd
+#define CMD NumArrayMinus
 #define OPINT *result = op1 - op2;
 #define OPDBL *result = op1 - op2;
 #define OPCPLX *result = NumArray_ComplexSubtract(op1, op2);
 #include "binop.h"
 
-#define CMD NumArrayTimesCmd
+#define CMD NumArrayTimes
 #define OPINT *result = op1 * op2;
 #define OPDBL *result = op1 * op2;
 #define OPCPLX *result = NumArray_ComplexMultiply(op1, op2);
 #include "binop.h"
 
-#define CMD NumArrayLdivideCmd
+#define CMD NumArrayLdivide
 #define OPINT if (op1!=0) { \
 		*result = op2 / op1; \
 	} else { \
-		Tcl_SetResult(interp, "Integer division by zero", NULL);\
+		*resultObj=Tcl_NewStringObj("Integer division by zero", -1);\
 		return TCL_ERROR;\
 	}
 #define OPDBL *result = op2 / op1;
 #define OPCPLX *result = NumArray_ComplexDivide(op2, op1);
 #include "binop.h"
 
-#define CMD NumArrayRdivideCmd
+#define CMD NumArrayRdivide
 #define OPINT if (op2!=0) { \
 		*result = op1 / op2; \
 	} else { \
-		Tcl_SetResult(interp, "Integer division by zero", NULL);\
+		*resultObj=Tcl_NewStringObj("Integer division by zero", -1);\
 		return TCL_ERROR;\
 	}
 
@@ -2080,40 +2235,40 @@ static inline double fsign(double x) {
 #define OPCPLX *result = NumArray_ComplexDivide(op1, op2);
 #include "binop.h"
 
-#define CMD NumArrayReminderCmd
+#define CMD NumArrayReminder
 #define OPINT if (op2!=0) { \
 		*result = op1 % op2; \
 	} else { \
-		Tcl_SetResult(interp, "Integer division by zero", NULL);\
+		*resultObj=Tcl_NewStringObj("Integer division by zero", -1);\
 		return TCL_ERROR;\
 	}
 #include "binop.h"
 
-#define CMD NumArrayGreaterCmd
+#define CMD NumArrayGreater
 #define OPINT *result = (op1>op2);
 #define OPDBL *result = (op1>op2);
 #define DBLRES NaWideInt
 #include "binop.h"
 
-#define CMD NumArrayLesserCmd
+#define CMD NumArrayLesser
 #define OPINT *result = (op1<op2);
 #define OPDBL *result = (op1<op2);
 #define DBLRES NaWideInt
 #include "binop.h"
 
-#define CMD NumArrayGreaterEqualCmd
+#define CMD NumArrayGreaterEqual
 #define OPINT *result = (op1>=op2);
 #define OPDBL *result = (op1<=op2);
 #define DBLRES NaWideInt
 #include "binop.h"
 
-#define CMD NumArrayLesserEqualCmd
+#define CMD NumArrayLesserEqual
 #define OPINT *result = (op1<=op2);
 #define OPDBL *result = (op1<=op2);
 #define DBLRES NaWideInt
 #include "binop.h"
 
-#define CMD NumArrayEqualCmd
+#define CMD NumArrayEqual
 #define OPINT *result = (op1==op2);
 #define OPDBL *result = (op1==op2);
 #define DBLRES NaWideInt
@@ -2121,7 +2276,7 @@ static inline double fsign(double x) {
 #define CPLXRES NaWideInt
 #include "binop.h"
 
-#define CMD NumArrayUnequalCmd
+#define CMD NumArrayUnequal
 #define OPINT *result = (op1!=op2);
 #define OPDBL *result = (op1!=op2);
 #define DBLRES NaWideInt
@@ -2130,32 +2285,32 @@ static inline double fsign(double x) {
 #include "binop.h"
 
 /* boolean operators */
-#define CMD NumArrayNotCmd
+#define CMD NumArrayNot
 #define INTOP *result = !op;
 #define INTRES NaWideInt
 #include "uniop.h"
 
-#define CMD NumArrayAndCmd
+#define CMD NumArrayAnd
 #define OPINT *result = (op1 && op2);
 #include "binop.h"
 
-#define CMD NumArrayOrCmd
+#define CMD NumArrayOr
 #define OPINT *result = (op1 || op2);
 #include "binop.h"
 
-#define CMD NumArrayPowCmd
+#define CMD NumArrayPow
 #define OPINT *result = pow(op1,op2);
 #define INTRES double
 #define OPDBL *result = pow(op1,op2);
 #define OPCPLX *result = NumArray_ComplexPow(op1,op2);
 #include "binop.h"
 
-#define CMD NumArrayMinCmd
+#define CMD NumArrayMin
 #define OPINT *result = op1 < op2 ? op1 : op2;
 #define OPDBL *result = op1 < op2 ? op1 : op2;
 #include "binop.h"
 
-#define CMD NumArrayMaxCmd
+#define CMD NumArrayMax
 #define OPINT *result = op1 > op2 ? op1 : op2;
 #define OPDBL *result = op1 > op2 ? op1 : op2;
 #include "binop.h"
@@ -2215,14 +2370,21 @@ static inline double fsign(double x) {
 /* Implement unary functions/operators */
 
 /* Data type conversion */
-#define CMD NumArrayConvDoubleCmd
+#define CMD NumArrayConvInt
+#define INTRES NaWideInt
+#define INTOP *result = op;
+#define DBLRES NaWideInt
+#define DBLOP *result = (NaWideInt)op;
+#include "uniop.h"
+
+#define CMD NumArrayConvDouble
 #define INTRES double
 #define INTOP *result = op;
 #define DBLRES double
 #define DBLOP *result = op;
 #include "uniop.h"
 
-#define CMD NumArrayConvComplexCmd
+#define CMD NumArrayConvComplex
 #define INTRES NumArray_Complex
 #define INTOP *result = NumArray_mkComplex(op, 0.0);
 #define DBLRES NumArray_Complex
@@ -2231,16 +2393,16 @@ static inline double fsign(double x) {
 #define CPLXOP *result = op;
 #include "uniop.h"
 
-#define CMD NumArrayAbsCmd
+#define CMD NumArrayAbs
 #define INTRES NaWideInt
-#define INTOP *result = abs(op);
+#define INTOP *result = labs(op);
 #define DBLRES double
 #define DBLOP *result = fabs(op);
 #define CPLXRES double
 #define CPLXOP *result = NumArray_ComplexAbs(op);
 #include "uniop.h"
 
-#define CMD NumArraySignCmd
+#define CMD NumArraySign
 #define INTRES NaWideInt
 #define INTOP *result = isign(op);
 #define DBLRES double
@@ -2249,7 +2411,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexSign(op);
 #include "uniop.h"
 
-#define CMD NumArrayArgCmd
+#define CMD NumArrayArg
 #define INTRES NaWideInt
 #define INTOP *result = 0;
 #define DBLRES double
@@ -2258,7 +2420,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexArg(op);
 #include "uniop.h"
 
-#define CMD NumArrayConjCmd
+#define CMD NumArrayConj
 #define INTRES NaWideInt
 #define INTOP *result = op;
 #define DBLRES double
@@ -2267,7 +2429,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexConj(op);
 #include "uniop.h"
 
-#define CMD NumArrayRealCmd
+#define CMD NumArrayReal
 #define INTRES NaWideInt
 #define INTOP *result = op;
 #define DBLRES double
@@ -2276,7 +2438,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = op.re;
 #include "uniop.h"
 
-#define CMD NumArrayImagCmd
+#define CMD NumArrayImag
 #define INTRES NaWideInt
 #define INTOP *result = 0;
 #define DBLRES double
@@ -2286,7 +2448,7 @@ static inline double fsign(double x) {
 #include "uniop.h"
 
 
-#define CMD NumArrayNegCmd
+#define CMD NumArrayNeg
 #define INTRES NaWideInt
 #define INTOP *result = -op;
 #define DBLRES double
@@ -2295,7 +2457,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexNeg(op);
 #include "uniop.h"
 
-#define CMD NumArraySinCmd
+#define CMD NumArraySin
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2304,7 +2466,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexSin(op);
 #include "uniop.h"
 
-#define CMD NumArrayCosCmd
+#define CMD NumArrayCos
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2313,7 +2475,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexCos(op);
 #include "uniop.h"
 
-#define CMD NumArrayTanCmd
+#define CMD NumArrayTan
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2322,7 +2484,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexTan(op);
 #include "uniop.h"
 
-#define CMD NumArrayExpCmd
+#define CMD NumArrayExp
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2331,7 +2493,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexExp(op);
 #include "uniop.h"
 
-#define CMD NumArrayLogCmd
+#define CMD NumArrayLog
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2340,7 +2502,16 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexLog(op);
 #include "uniop.h"
 
-#define CMD NumArraySqrtCmd
+#define CMD NumArrayLog10
+#define INTRES double
+#define DBLRES double
+#define INTOP DBLOP
+#define DBLOP *result = log10(op);
+#define CPLXRES NumArray_Complex
+#define CPLXOP *result = NumArray_ComplexLog(op);
+#include "uniop.h"
+
+#define CMD NumArraySqrt
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2349,7 +2520,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexSqrt(op);
 #include "uniop.h"
 
-#define CMD NumArraySinhCmd
+#define CMD NumArraySinh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2358,7 +2529,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexSinh(op);
 #include "uniop.h"
 
-#define CMD NumArrayCoshCmd
+#define CMD NumArrayCosh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2367,7 +2538,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexCosh(op);
 #include "uniop.h"
 
-#define CMD NumArrayTanhCmd
+#define CMD NumArrayTanh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2376,7 +2547,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexTanh(op);
 #include "uniop.h"
 
-#define CMD NumArrayAsinCmd
+#define CMD NumArrayAsin
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2385,7 +2556,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexAsin(op);
 #include "uniop.h"
 
-#define CMD NumArrayAcosCmd
+#define CMD NumArrayAcos
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2394,7 +2565,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexAcos(op);
 #include "uniop.h"
 
-#define CMD NumArrayAtanCmd
+#define CMD NumArrayAtan
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2403,7 +2574,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexAtan(op);
 #include "uniop.h"
 
-#define CMD NumArrayAsinhCmd
+#define CMD NumArrayAsinh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2412,7 +2583,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexAsinh(op);
 #include "uniop.h"
 
-#define CMD NumArrayAcoshCmd
+#define CMD NumArrayAcosh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2421,7 +2592,7 @@ static inline double fsign(double x) {
 #define CPLXOP *result = NumArray_ComplexAcosh(op);
 #include "uniop.h"
 
-#define CMD NumArrayAtanhCmd
+#define CMD NumArrayAtanh
 #define INTRES double
 #define DBLRES double
 #define INTOP DBLOP
@@ -2432,7 +2603,7 @@ static inline double fsign(double x) {
 
 
 /* Implement reductions with optional dimension */
-#define CMD NumArraySumCmd
+#define CMD NumArraySum
 #define INIT ;
 #define FIRST accum=op;
 #define INTOP accum+=op;
@@ -2442,7 +2613,7 @@ static inline double fsign(double x) {
 #include "reduction.h"
 
 
-#define CMD NumArrayMeanCmd
+#define CMD NumArrayMean
 #define INIT ;
 #define FIRST accum=op;
 #define INTRES double
@@ -2453,7 +2624,7 @@ static inline double fsign(double x) {
 #define CPLXRETURN accum.re /= nlength; accum.im /= nlength; 
 #include "reduction.h"
 
-#define CMD NumArrayAxisMinCmd
+#define CMD NumArrayAxisMin
 #define INIT ;
 #define FIRST accum=op;
 #define INTOP if (op < accum) accum=op;
@@ -2461,7 +2632,7 @@ static inline double fsign(double x) {
 #define RETURN ;
 #include "reduction.h"
 
-#define CMD NumArrayAxisMaxCmd
+#define CMD NumArrayAxisMax
 #define INIT ;
 #define FIRST accum=op;
 #define INTOP if (op > accum) accum=op;
@@ -2469,7 +2640,7 @@ static inline double fsign(double x) {
 #define RETURN ;
 #include "reduction.h"
 
-#define CMD NumArrayStdCmd
+#define CMD NumArrayStd
 #define INIT double first; double sum=0;
 #define FIRST accum=0; first=op;
 #define DBLOP  accum+=(op-first)*(op-first); sum+=(op-first);
@@ -2478,7 +2649,7 @@ static inline double fsign(double x) {
 #define RETURN accum = (nlength==1)?0:sqrt(accum/(nlength-1) - (sum*sum/nlength)/(nlength-1));
 #include "reduction.h"
 
-#define CMD NumArrayStd1Cmd
+#define CMD NumArrayStd1
 #define INIT double first; double sum=0;
 #define FIRST accum=0; first=op;
 #define DBLOP  accum+=(op-first)*(op-first); sum+=(op-first);
@@ -2487,14 +2658,14 @@ static inline double fsign(double x) {
 #define RETURN accum = sqrt(accum/nlength - (sum/nlength)*(sum/nlength));
 #include "reduction.h"
 
-#define CMD NumArrayAllCmd
+#define CMD NumArrayAll
 #define INIT ;
 #define FIRST if (op) { accum=1; } else { accum=0; }
 #define INTOP if (!op) { accum=0; break; } 
 #define RETURN ;
 #include "reduction.h"
 
-#define CMD NumArrayAnyCmd
+#define CMD NumArrayAny
 #define INIT ;
 #define FIRST if (!op) { accum=0; } else { accum=1; }
 #define INTOP if (op) { accum=1; break; } 

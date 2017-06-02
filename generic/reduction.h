@@ -56,20 +56,21 @@
 #define CPLXRES NumArray_Complex
 #endif
 
-int CMD( 
+#define TCLCMDPROC(X) NUMARRAYTPASTER(X,Cmd)
+
+int CMD(Tcl_Obj* naObj, int axis, Tcl_Obj **resultObj);
+
+MODULE_SCOPE
+int TCLCMDPROC(CMD) ( 
 		ClientData dummy,
 		Tcl_Interp *interp,
 		int objc,
 		Tcl_Obj *const *objv)
 {	
 	Tcl_Obj *naObj, *resultObj;
-	NumArrayInfo *info, *resultinfo, *sliceinfo;
-	NumArraySharedBuffer *sharedbuf, *resultbuf;
 	int axis;
-	int *resultdims;
-	int resultnDim;
-	int d;
-	
+	int resultcode;
+
 	if (objc != 2 && objc != 3) {
 		Tcl_WrongNumArgs(interp, 1, objv, "numarray ?axis?");
 		return TCL_ERROR;
@@ -88,23 +89,38 @@ int CMD(
 			return TCL_ERROR;
 		}
 	}
+	
+	resultcode=CMD(naObj, axis, &resultObj);
+	
+	Tcl_SetObjResult(interp, resultObj);
 
+	return resultcode;
+}
+
+int CMD(Tcl_Obj* naObj, int axis, Tcl_Obj **resultObj) {
+
+	NumArrayInfo *info, *resultinfo, *sliceinfo;
+	NumArraySharedBuffer *sharedbuf, *resultbuf;
+	index_t *resultdims;
+	int resultnDim;
+	int d;
+	
 	sharedbuf =  naObj->internalRep.twoPtrValue.ptr1;
 	info = naObj->internalRep.twoPtrValue.ptr2;
 	
 	if (axis < 0 || axis >= info -> nDim) {
-		Tcl_SetResult(interp, "Dimension mismatch", NULL);
+		*resultObj=Tcl_NewStringObj("Dimension mismatch", -1);
 		return TCL_ERROR;
 	}
 
 	if (ISEMPTYINFO(info)) {
-		Tcl_SetResult(interp, "Empty array", NULL);
+		*resultObj=Tcl_NewStringObj("Empty array", -1);
 		return TCL_ERROR;
 	}
 
 	/* cut down dimension list by removing the axis
 	 * over which the reduction is performed*/
-	resultdims = ckalloc(sizeof(int)*info->nDim);
+	resultdims = ckalloc(sizeof(index_t)*info->nDim);
 	if (info->nDim == 1) {
 		/* Reduction to scalar value */
 		resultnDim=1;
@@ -112,16 +128,10 @@ int CMD(
 	} else {
 		resultnDim = 0;
 		for (d=0; d < info->nDim; d++) {
-			if (axis==0 || d!=axis) {
-				/* never cut the first axis, otherwise
-				 * row vectors are converted to column vectors */
+			if (d!=axis) {
 				resultdims[resultnDim] = info -> dims[d];
 				resultnDim++;
 			}
-		}
-
-		if (axis==0) {
-			resultdims[axis]=1;
 		}
 	}
 
@@ -148,7 +158,7 @@ int CMD(
 
 		default:
 			
-		    RESULTPRINTF(("Undefined function for datatype %s", NumArray_typename[info->type]));
+		    *resultObj=Tcl_ObjPrintf("Undefined function for datatype %s", NumArray_typename[info->type]);
 		    ckfree(resultdims);
 		    return TCL_ERROR;
 	}
@@ -167,13 +177,12 @@ int CMD(
 	/* the new shared buffer is in canonical form, 
 	 * thus we can simply iterate over it by pointer
 	 * arithmetics. But the input array may be non-canonical
-	 * TODO optimize for canonical case */
-
+	 */
 	NumArrayIterator it;
 	NumArrayIteratorInit(sliceinfo, sharedbuf, &it);
 
-	const int nlength = info -> dims[axis];
-	const int increment = info -> pitches[axis];
+	const index_t nlength = info -> dims[axis];
+	const index_t increment = info -> pitches[axis];
 	switch (info -> type) {
 		#ifdef DBLOP
 		case NumArray_Float64: {
@@ -186,7 +195,7 @@ int CMD(
 				const double op = *((double *) opptr);
 				DBLFIRST; 
 				opptr += increment;
-				int i;
+				index_t i;
 				for (i=0; i<nlength-1; i++) {
 					const double op = *((double *) opptr);
 					DBLOP;
@@ -211,7 +220,7 @@ int CMD(
 				const NaWideInt op = *((NaWideInt *) opptr);
 				INTFIRST; 
 				opptr += increment;
-				int i;
+				index_t i;
 				for (i=0; i<nlength-1; i++) {
 					const NaWideInt op = *((NaWideInt *) opptr);
 					INTOP;
@@ -236,7 +245,7 @@ int CMD(
 				const NumArray_Complex op = *((NumArray_Complex *) opptr);
 				CPLXFIRST; 
 				opptr += increment;
-				int i;
+				index_t i;
 				for (i=0; i<nlength-1; i++) {
 					const NumArray_Complex op = *((NumArray_Complex *) opptr);
 					CPLXOP;
@@ -252,21 +261,21 @@ int CMD(
 		
 		default:
 			/* Can't happen */
-			RESULTPRINTF(("Undefined function for datatype %s", NumArray_typename[info->type]));
+			*resultObj=Tcl_ObjPrintf("Undefined function for datatype %s", NumArray_typename[info->type]);
             return TCL_ERROR;
 	}
 
 	NumArrayIteratorFree(&it);
 	DeleteNumArrayInfo(sliceinfo);
 
-	resultObj=Tcl_NewObj();
-	NumArraySetInternalRep(resultObj, resultbuf, resultinfo);
-	Tcl_SetObjResult(interp, resultObj);
+	*resultObj=Tcl_NewObj();
+	NumArraySetInternalRep(*resultObj, resultbuf, resultinfo);
 
 	return TCL_OK;
 }
 
 #undef CMD
+#undef TCLCMDPROC
 #undef OP
 #undef RETURN
 #undef FIRST

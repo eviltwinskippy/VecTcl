@@ -2,14 +2,20 @@
 #define VECTCL_H
 #include <tcl.h>
 #include "nacomplex.h"
-
-#ifdef VALGRIND
-#include <stdlib.h>
-#undef ckalloc
-#undef ckfree
-#define ckalloc malloc
-#define ckfree free
+#include "map.h"
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
 #endif
+#ifdef HAVE_INTTYPES_H
+#include <inttypes.h>
+#endif
+
+
+
+#include <stdlib.h>
+#include <stddef.h>
+
+typedef ptrdiff_t index_t;
 
 /* data type for VecTcl objects */
 
@@ -25,12 +31,44 @@ typedef long int NaWideInt;
 /* Possible datatypes */
 typedef enum {
 	NumArray_NoType=-1,
-	NumArray_Int=0,
-	NumArray_Float64=1,
-	NumArray_Complex128=2,
-	NumArray_SentinelType=3
-	/* NumArray_BigInt=4 ?*/
+NumArray_Bool=0,
+		NumArray_Int=1,
+		NumArray_Int8=2,
+		NumArray_Uint8=3,
+		NumArray_Int16=4,
+		NumArray_Uint16=5,
+		NumArray_Int32=6,
+		NumArray_Uint32=7,
+		NumArray_Int64=8,
+		NumArray_Uint64=9,
+		NumArray_Float32=10,
+		NumArray_Float64=11,
+		NumArray_Complex64=12,
+		NumArray_Complex128=13,
+		NumArray_Tcl_Obj=14,
+		
+	NumArray_SentinelType=15
+
 } NumArrayType;
+
+#define NUMARRAYTYPESTRINGS {\
+"bool", "int", "int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float", "double", "complex64", "complex128", "value" , "Sentinel" }
+
+#define MAX_SUFFIX 5
+
+#define NA_ALLTYPES NumArray_Bool, NumArray_Int, NumArray_Int8, NumArray_Uint8, NumArray_Int16, NumArray_Uint16, NumArray_Int32, NumArray_Uint32, NumArray_Int64, NumArray_Uint64, NumArray_Float32, NumArray_Float64, NumArray_Complex64, NumArray_Complex128, NumArray_Tcl_Obj
+
+#define NA_NUMERICTYPES NumArray_Bool, NumArray_Int, NumArray_Int8, NumArray_Uint8, NumArray_Int16, NumArray_Uint16, NumArray_Int32, NumArray_Uint32, NumArray_Int64, NumArray_Uint64, NumArray_Float32, NumArray_Float64, NumArray_Complex64, NumArray_Complex128
+
+#define NA_FIXEDINTEGERS NumArray_Int8, NumArray_Uint8, NumArray_Int16, NumArray_Uint16, NumArray_Int32, NumArray_Uint32, NumArray_Int64, NumArray_Uint64
+
+#define NA_INTEGERS NumArray_Int, NumArray_Bool, NumArray_Int8, NumArray_Uint8, NumArray_Int16, NumArray_Uint16, NumArray_Int32, NumArray_Uint32, NumArray_Int64, NumArray_Uint64
+
+#define NA_REALTYPES NumArray_Int, NumArray_Bool, NumArray_Int8, NumArray_Uint8, NumArray_Int16, NumArray_Uint16, NumArray_Int32, NumArray_Uint32, NumArray_Int64, NumArray_Uint64, NumArray_Float32, NumArray_Float64
+
+
+
+
 
 /* struct for storing a single polymorphic value */
 typedef struct {
@@ -47,22 +85,22 @@ NumArrayType NumArray_UpcastType(NumArrayType base);
 NumArrayType NumArray_UpcastCommonType(NumArrayType type1, NumArrayType type2);
 
 int NumArrayConvertToType(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayType type, Tcl_Obj **dest);
-int NumArrayType_SizeOf(NumArrayType type);
+size_t NumArrayType_SizeOf(NumArrayType type);
 
 /* Metadata to describe the raw buffer */
 typedef struct  {
 	NumArrayType type;
 	int nDim;
-	int bufsize;
-	int offset;
+	size_t bufsize;
+	index_t offset;
 	int canonical;
-	int *dims;
-	int *pitches;
+	index_t *dims;
+	index_t *pitches;
 } NumArrayInfo;
 
 /* Constructor, destructor, copy constructor for NumArrayInfo */
-NumArrayInfo* CreateNumArrayInfo(int nDim, const int *dims, NumArrayType dtype);
-NumArrayInfo* CreateNumArrayInfoColMaj(int nDim, const int *dims, NumArrayType dtype);
+NumArrayInfo* CreateNumArrayInfo(int nDim, const index_t *dims, NumArrayType dtype);
+NumArrayInfo* CreateNumArrayInfoColMaj(int nDim, const index_t *dims, NumArrayType dtype);
 void DeleteNumArrayInfo(NumArrayInfo* info);
 NumArrayInfo* DupNumArrayInfo(NumArrayInfo* src);
 
@@ -71,7 +109,7 @@ NumArrayInfo* DupNumArrayInfo(NumArrayInfo* src);
 
 /* Create an array slice */
 int NumArrayInfoSlice(Tcl_Interp *interp, NumArrayInfo *info, Tcl_Obj *slicelist, NumArrayInfo **resultPtr);
-int NumArrayInfoSlice1Axis(Tcl_Interp *interp, NumArrayInfo *info, int axis, int start, int stop, int incr);
+int NumArrayInfoSlice1Axis(Tcl_Interp *interp, NumArrayInfo *info, int axis, index_t start, index_t stop, index_t incr);
 
 /* A refcounted buffer */
 typedef struct {
@@ -79,15 +117,15 @@ typedef struct {
 	char *buffer;
 } NumArraySharedBuffer;
 
-NumArraySharedBuffer *NumArrayNewSharedBuffer (int size);
+NumArraySharedBuffer *NumArrayNewSharedBuffer (size_t size);
 void *NumArrayGetPtrFromSharedBuffer(NumArraySharedBuffer *sharedbuf);
 void NumArraySharedBufferDecrRefcount(NumArraySharedBuffer *sharedbuf);
 void NumArraySharedBufferIncrRefcount(NumArraySharedBuffer *sharedbuf);
 
 /* Convenience to create a vector and 2D matrix */
-Tcl_Obj *NumArrayNewVector(NumArrayType type, int m);
-Tcl_Obj *NumArrayNewMatrix(NumArrayType type, int m, int n);
-Tcl_Obj *NumArrayNewMatrixColMaj(NumArrayType type, int m, int n);
+Tcl_Obj *NumArrayNewVector(NumArrayType type, index_t m);
+Tcl_Obj *NumArrayNewMatrix(NumArrayType type, index_t m, index_t n);
+Tcl_Obj *NumArrayNewMatrixColMaj(NumArrayType type, index_t m, index_t n);
 
 /* Assemble / retrieve info and data storage into a Tcl_Obj */
 void NumArraySetInternalRep(Tcl_Obj *naObj, NumArraySharedBuffer *sharedbuf, NumArrayInfo *info);
@@ -102,9 +140,9 @@ void NumArrayUnshareBuffer(Tcl_Obj *naObj);
 
 /* Iterator to loop over all elements in an array */
 typedef struct {
-	int counter;
-	int pitch;
-	int dim;
+	index_t counter;
+	index_t pitch;
+	index_t dim;
 } NumArrayIteratorDimension;
 
 typedef struct {
@@ -131,9 +169,9 @@ int NumArrayIteratorFinished(NumArrayIterator *it);
 void* NumArrayIteratorAdvanceRow(NumArrayIterator *it);
 /* Retrieve pitch and
  * number of elements in the innermost loop */
-int NumArrayIteratorRowPitchTyped(NumArrayIterator *it);
-int NumArrayIteratorRowPitch(NumArrayIterator *it);
-int NumArrayIteratorRowLength(NumArrayIterator *it);
+index_t NumArrayIteratorRowPitchTyped(NumArrayIterator *it);
+index_t NumArrayIteratorRowPitch(NumArrayIterator *it);
+index_t NumArrayIteratorRowLength(NumArrayIterator *it);
 
 /* Retrieve value from iterator */
 /* Pointer */
@@ -164,14 +202,14 @@ int NumArraySetValue(NumArrayInfo *destinfo, NumArraySharedBuffer *destbuf, NumA
 int NumArrayGetScalarValueFromObj(Tcl_Interp *interp, Tcl_Obj* naObj, NumArray_ValueType *value);
 /* Index object for simple 1D, 2D and 3D indexing */
 typedef struct {
-	int pitches[3];
+	index_t pitches[3];
 	char *baseptr;
 } NumArrayIndex;
 
 void NumArrayIndexInit(NumArrayInfo *info, NumArraySharedBuffer *sharedbuf, NumArrayIndex *ind);
 int NumArrayIndexInitObj(Tcl_Interp *interp, Tcl_Obj *naObj, NumArrayIndex *ind);
-void* NumArrayIndex1DGetPtr(NumArrayIndex *ind, int i);
-void* NumArrayIndex2DGetPtr(NumArrayIndex *ind, int i, int j);
-void *NumArrayIndex3DGetPtr(NumArrayIndex *ind, int i, int j, int k);
+void* NumArrayIndex1DGetPtr(NumArrayIndex *ind, index_t i);
+void* NumArrayIndex2DGetPtr(NumArrayIndex *ind, index_t i, index_t j);
+void *NumArrayIndex3DGetPtr(NumArrayIndex *ind, index_t i, index_t j, index_t k);
 
 #endif
